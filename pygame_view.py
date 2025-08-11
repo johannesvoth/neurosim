@@ -157,6 +157,17 @@ class PygameGraphApp:
             if self.sim_steps_plus_rect.collidepoint(mouse_pos):
                 self._steps_per_click = min(10000, self._steps_per_click + 1)
                 return
+            # Neuron one-step injection controls
+            sel = self._get_selected_neuron()
+            if sel is not None:
+                if hasattr(self, "_neuron_inj_plus_rect") and self._neuron_inj_plus_rect.collidepoint(mouse_pos):
+                    self.sim.inject_current(sel.id, +10.0)
+                    self._add_message(f"inject +10 to neuron {sel.id}")
+                    return
+                if hasattr(self, "_neuron_inj_minus_rect") and self._neuron_inj_minus_rect.collidepoint(mouse_pos):
+                    self.sim.inject_current(sel.id, -10.0)
+                    self._add_message(f"inject -10 to neuron {sel.id}")
+                    return
             # Weight buttons for selected connection
             for label, rect in self._get_selected_weight_button_rects():
                 if rect.collidepoint(mouse_pos) and self.selected_connection is not None:
@@ -176,8 +187,8 @@ class PygameGraphApp:
             delete_button = self.buttons[1]
             if delete_button.rect.collidepoint(mouse_pos):
                 self.model.delete_selected()
-                if self.selected_connection is not None and self.selected_connection.selected:
-                    self.selected_connection = None
+                # Clear any stale connection selection after deletion
+                self.selected_connection = None
                 return
 
             # Otherwise, canvas interactions
@@ -316,6 +327,10 @@ class PygameGraphApp:
             end = self.dragging_connection_pos + self.camera_offset
             pygame.draw.line(self.screen, (120, 120, 130), (int(start.x), int(start.y)), (int(end.x), int(end.y)), 2)
 
+        # Clear invalid connection selection
+        if self.selected_connection is not None and not self._selected_connection_is_valid():
+            self.selected_connection = None
+
         # Messages and selected connection controls
         self._draw_stats()
         self._draw_messages()
@@ -378,6 +393,14 @@ class PygameGraphApp:
         p_text = self.font.render(params, True, (190, 190, 200))
         self.screen.blit(p_text, (rect.left + 8, param_y))
 
+        # One-step current injection controls
+        inj_plus = pygame.Rect(rect.right - 70, rect.top + 6, 26, 20)
+        inj_minus = pygame.Rect(rect.right - 38, rect.top + 6, 26, 20)
+        self._neuron_inj_plus_rect = inj_plus
+        self._neuron_inj_minus_rect = inj_minus
+        self._draw_small_btn(inj_plus, "+")
+        self._draw_small_btn(inj_minus, "-")
+
         # Phase plane area
         plot_margin = 8
         plot_rect = pygame.Rect(rect.left + plot_margin, param_y + 18, rect.width - 2 * plot_margin, rect.height - (param_y - rect.top) - 26)
@@ -394,6 +417,42 @@ class PygameGraphApp:
             y = plot_rect.top + int((u_max - u) / (u_max - u_min) * (plot_rect.height - 1))
             return x, y
 
+        # Constrain drawing within the plot area
+        prev_clip = self.screen.get_clip()
+        self.screen.set_clip(plot_rect)
+
+        # Axes inside plot: u=0 (horizontal) and v=0 (vertical)
+        # Draw border already exists; we add axis lines and ticks with numbers
+        def draw_axes_and_ticks() -> None:
+            # Axes lines
+            # u = 0 horizontal
+            if u_min <= 0.0 <= u_max:
+                _, y0 = vu_to_px(v_min, 0.0)
+                pygame.draw.line(self.screen, (80, 80, 95), (plot_rect.left, y0), (plot_rect.right - 1, y0), 1)
+            # v = 0 vertical
+            if v_min <= 0.0 <= v_max:
+                x0, _ = vu_to_px(0.0, u_min)
+                pygame.draw.line(self.screen, (80, 80, 95), (x0, plot_rect.top), (x0, plot_rect.bottom - 1), 1)
+
+            # Ticks and numeric labels (draw inside the plot bounds)
+            tick_color = (120, 120, 135)
+
+            # v-axis ticks along bottom
+            num_v_ticks = 5
+            for i in range(num_v_ticks + 1):
+                v = v_min + (v_max - v_min) * i / num_v_ticks
+                x, y = vu_to_px(v, u_min)
+                pygame.draw.line(self.screen, tick_color, (x, plot_rect.bottom - 6), (x, plot_rect.bottom - 1), 1)
+
+            # u-axis ticks along left side
+            num_u_ticks = 4
+            for i in range(num_u_ticks + 1):
+                u = u_min + (u_max - u_min) * i / num_u_ticks
+                x, y = vu_to_px(v_min, u)
+                pygame.draw.line(self.screen, tick_color, (plot_rect.left, y), (plot_rect.left + 5, y), 1)
+
+        draw_axes_and_ticks()
+
         # Nullclines
         I = self.sim.config.input_current
         # u = b v (du/dt = 0)
@@ -404,29 +463,35 @@ class PygameGraphApp:
         points_dv0 = [vu_to_px(v, 0.04 * v * v + 5 * v + 140.0 + I) for v in v_samples]
         pygame.draw.lines(self.screen, (230, 140, 140), False, points_dv0, 1)
 
-        # Vector field (sparse)
-        grid_cols, grid_rows = 12, 8
-        for gi in range(grid_cols + 1):
-            for gj in range(grid_rows + 1):
-                v = v_min + (v_max - v_min) * gi / grid_cols
-                u = u_min + (u_max - u_min) * gj / grid_rows
-                dv = 0.04 * v * v + 5.0 * v + 140.0 - u + I
-                du = neuron.a * (neuron.b * v - u)
-                # Normalize
-                mag = (dv * dv + du * du) ** 0.5
-                if mag == 0:
-                    continue
-                dvn, dun = dv / mag, du / mag
-                cx, cy = vu_to_px(v, u)
-                length = 8
-                ex = int(cx + dvn * length)
-                ey = int(cy - dun * length)  # minus because screen y increases downward
-                pygame.draw.line(self.screen, (120, 120, 130), (cx, cy), (ex, ey), 1)
+        # Spike threshold line at v = 30 mV (reset trigger)
+        v_thresh = 30.0
+        x_thr = plot_rect.left + int((v_thresh - v_min) / (v_max - v_min) * (plot_rect.width - 1))
+        if plot_rect.left <= x_thr < plot_rect.right:
+            pygame.draw.line(
+                self.screen,
+                (240, 180, 120),
+                (x_thr, plot_rect.top),
+                (x_thr, plot_rect.bottom - 1),
+                2,
+            )
 
         # Current state point
         px, py = vu_to_px(neuron.v, neuron.u)
+        # Clamp point to plot bounds
+        px = max(plot_rect.left, min(plot_rect.right - 1, px))
+        py = max(plot_rect.top, min(plot_rect.bottom - 1, py))
         color = (240, 230, 140) if neuron.spiked else (200, 220, 120)
         pygame.draw.circle(self.screen, color, (px, py), 3)
+        # Restore clip
+        self.screen.set_clip(prev_clip)
+
+    def _draw_small_btn(self, rect: pygame.Rect, label: str) -> None:
+        mouse_pos = pygame.mouse.get_pos()
+        is_hover = rect.collidepoint(mouse_pos)
+        pygame.draw.rect(self.screen, (60, 60, 70) if not is_hover else (85, 85, 100), rect, border_radius=4)
+        t = self.font.render(label, True, (230, 230, 240))
+        tr = t.get_rect(center=rect.center)
+        self.screen.blit(t, tr)
 
     def _draw_neurons(self) -> None:
         for n in self.model.neurons:
@@ -487,10 +552,17 @@ class PygameGraphApp:
             if conn.selected:
                 self._draw_quadratic_curve(self.screen, (220, 220, 230), p, control, q, width=6)
             self._draw_quadratic_curve(self.screen, color, p, control, q, width=3)
+            # Arrowhead near target to indicate direction
+            tip_t = 0.92
+            tip = self._bezier_point(p, control, q, tip_t)
+            tangent = self._bezier_tangent(p, control, q, tip_t)
+            if tangent.length_squared() > 0.0001:
+                self._draw_arrowhead(self.screen, color, tip, tangent)
 
     def _neuron_screen_pos(self, neuron_id: int) -> Tuple[int, int]:
         n = self.model.find_neuron(neuron_id)
-        assert n is not None
+        if n is None:
+            return 0, 0
         pos = pygame.Vector2(n.x, n.y) + self.camera_offset
         return int(pos.x), int(pos.y)
 
@@ -511,6 +583,44 @@ class PygameGraphApp:
             point = one_t * one_t * p0 + 2 * one_t * t * p1 + t * t * p2
             pygame.draw.line(surface, color, (int(last.x), int(last.y)), (int(point.x), int(point.y)), width)
             last = point
+
+    def _bezier_point(
+        self,
+        p0: pygame.Vector2,
+        p1: pygame.Vector2,
+        p2: pygame.Vector2,
+        t: float,
+    ) -> pygame.Vector2:
+        one_t = 1.0 - t
+        return one_t * one_t * p0 + 2 * one_t * t * p1 + t * t * p2
+
+    def _bezier_tangent(
+        self,
+        p0: pygame.Vector2,
+        p1: pygame.Vector2,
+        p2: pygame.Vector2,
+        t: float,
+    ) -> pygame.Vector2:
+        # Derivative of quadratic Bezier: 2(1-t)(p1-p0) + 2t(p2-p1)
+        return 2 * (1.0 - t) * (p1 - p0) + 2 * t * (p2 - p1)
+
+    def _draw_arrowhead(
+        self,
+        surface: pygame.Surface,
+        color: Tuple[int, int, int],
+        tip: pygame.Vector2,
+        direction: pygame.Vector2,
+        size: float = 10.0,
+    ) -> None:
+        dir_norm = direction.normalize()
+        base = tip - dir_norm * size
+        # Perpendicular vector for wings
+        perp = pygame.Vector2(-dir_norm.y, dir_norm.x)
+        wing = perp * (size * 0.45)
+        left = base + wing
+        right = base - wing
+        points = [(int(tip.x), int(tip.y)), (int(left.x), int(left.y)), (int(right.x), int(right.y))]
+        pygame.draw.polygon(surface, color, points)
 
     def _color_for_weight(self, weight: float) -> Tuple[int, int, int]:
         w = max(-1.0, min(1.0, weight))
@@ -595,7 +705,7 @@ class PygameGraphApp:
         return p.distance_to(proj)
 
     def _get_selected_weight_button_rects(self) -> List[Tuple[str, pygame.Rect]]:
-        if self.selected_connection is None:
+        if self.selected_connection is None or not self._selected_connection_is_valid():
             return []
         p = pygame.Vector2(*self._neuron_screen_pos(self.selected_connection.source_id))
         q = pygame.Vector2(*self._neuron_screen_pos(self.selected_connection.target_id))
@@ -682,5 +792,17 @@ class PygameGraphApp:
             text = self.font.render(label, True, (230, 230, 240))
             text_rect = text.get_rect(center=rect.center)
             self.screen.blit(text, text_rect)
+
+    def _selected_connection_is_valid(self) -> bool:
+        conn = self.selected_connection
+        if conn is None:
+            return False
+        if conn not in self.model.connections:
+            return False
+        if self.model.find_neuron(conn.source_id) is None:
+            return False
+        if self.model.find_neuron(conn.target_id) is None:
+            return False
+        return True
 
 
