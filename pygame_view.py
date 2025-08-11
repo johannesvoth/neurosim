@@ -103,7 +103,12 @@ class PygameGraphApp:
             return btn
 
         self.buttons = [
-            make_button("Neuron"),  # draggable palette item
+            make_button("RS Neuron"),  # draggable palette item
+            make_button("FS Neuron"),
+            make_button("I Neuron"),
+            # make_button("IB Neuron"),
+            # make_button("CH Neuron"),
+            # make_button("LTS Neuron"),
             make_button("Delete"),
         ]
 
@@ -176,16 +181,16 @@ class PygameGraphApp:
                     self._add_message(f"weight set to {int(self.selected_connection.weight)}")
                     return
 
-            # Start dragging neuron from palette if clicked on the neuron button
-            neuron_button = self.buttons[0]
-            if neuron_button.rect.collidepoint(mouse_pos):
-                self.dragging_palette_item = "Neuron"
-                self.drag_position = mouse_pos_v
-                return
+            # Start dragging neuron from palette if clicked on a preset button
+            for idx in self._preset_button_indices():
+                if self.buttons[idx].rect.collidepoint(mouse_pos):
+                    self.dragging_palette_item = self.buttons[idx].label
+                    self.drag_position = mouse_pos_v
+                    return
 
             # Delete button acts on selected items
-            delete_button = self.buttons[1]
-            if delete_button.rect.collidepoint(mouse_pos):
+            del_idx = self._delete_button_index()
+            if del_idx is not None and self.buttons[del_idx].rect.collidepoint(mouse_pos):
                 self.model.delete_selected()
                 # Clear any stale connection selection after deletion
                 self.selected_connection = None
@@ -227,10 +232,15 @@ class PygameGraphApp:
 
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             # Drop palette item onto canvas
-            if self.dragging_palette_item == "Neuron":
+            if self.dragging_palette_item:
                 if canvas_rect.collidepoint(mouse_pos):
                     world_mouse = mouse_pos_v - self.camera_offset
-                    self.model.add_neuron(world_mouse.x, world_mouse.y)
+                    label = self.dragging_palette_item
+                    type_name = label.split()[0] if label else "RS"
+                    if type_name in self.model.NEURON_PRESETS:
+                        self.model.add_neuron_of_type(type_name, world_mouse.x, world_mouse.y)
+                    else:
+                        self.model.add_neuron(world_mouse.x, world_mouse.y)
                 self.dragging_palette_item = None
 
             # Stop dragging existing neuron
@@ -269,7 +279,7 @@ class PygameGraphApp:
                 self.dragging_connection_from = None
 
         elif event.type == pygame.MOUSEMOTION:
-            if self.dragging_palette_item == "Neuron":
+            if self.dragging_palette_item:
                 self.drag_position = mouse_pos_v
             if self.dragging_existing_neuron is not None:
                 world_mouse = mouse_pos_v - self.camera_offset
@@ -316,10 +326,13 @@ class PygameGraphApp:
         self._draw_neurons()
 
         # Palette drag preview
-        if self.dragging_palette_item == "Neuron":
+        if self.dragging_palette_item:
             preview_color = (120, 180, 220)
             pygame.draw.circle(self.screen, preview_color, (int(self.drag_position.x), int(self.drag_position.y)), 18)
             pygame.draw.circle(self.screen, (255, 255, 255), (int(self.drag_position.x), int(self.drag_position.y)), 18, 2)
+            # Label preview
+            lbl = self.font.render(self.dragging_palette_item, True, (230, 230, 240))
+            self.screen.blit(lbl, (self.drag_position.x + 16, self.drag_position.y - 10))
 
         # Connection drag preview
         if self.dragging_connection_from is not None:
@@ -376,6 +389,15 @@ class PygameGraphApp:
                 return n
         return None
 
+    def _preset_button_indices(self) -> List[int]:
+        return [i for i, b in enumerate(self.buttons) if b.label.endswith("Neuron")]
+
+    def _delete_button_index(self) -> Optional[int]:
+        for i, b in enumerate(self.buttons):
+            if b.label == "Delete":
+                return i
+        return None
+
     def _draw_neuron_overview(self) -> None:
         neuron = self._get_selected_neuron()
         if neuron is None:
@@ -386,7 +408,7 @@ class PygameGraphApp:
         pygame.draw.rect(self.screen, (60, 60, 70), rect, width=1, border_radius=6)
 
         # Title and params
-        title = self.font.render(f"Neuron {neuron.id}", True, (210, 210, 220))
+        title = self.font.render(f"Neuron {neuron.id} ({neuron.type_name})", True, (210, 210, 220))
         self.screen.blit(title, (rect.left + 8, rect.top + 6))
         param_y = rect.top + 24
         params = f"a={neuron.a:.2f}  b={neuron.b:.2f}  c={neuron.c:.0f}  d={neuron.d:.0f}"

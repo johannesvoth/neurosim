@@ -54,6 +54,7 @@ class IzhikevichSimulator:
                 self.config.input_current
                 + incoming.get(n.id, 0.0)
                 + self._pending_injection.get(n.id, 0.0)
+                + n.i_baseline
             ) # I is a global input current to all neurons. # for a specifc neuron we add  the synaptic input. Again, usually 0.
 
             # Izhikevich model differential equations (ms scale)

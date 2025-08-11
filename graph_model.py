@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, ClassVar
 
 
 @dataclass
@@ -18,6 +18,8 @@ class NeuronModel:
     v: float = -65.0
     u: float = -13.0  # typically b*v
     spiked: bool = False
+    type_name: str = "Custom"
+    i_baseline: float = 0.0
 
 
 @dataclass
@@ -36,6 +38,41 @@ class GraphModel:
 
     def add_neuron(self, x: float, y: float) -> NeuronModel:
         neuron = NeuronModel(id=self._next_neuron_id, x=x, y=y)
+        self._next_neuron_id += 1
+        self.neurons.append(neuron)
+        return neuron
+
+    # Common Izhikevich neuron type presets (class-level constant)
+    NEURON_PRESETS: ClassVar[Dict[str, Tuple[float, float, float, float]]] = {
+        # name: (a, b, c, d)
+        "RS": (0.02, 0.20, -65.0, 8.0),   # Regular spiking
+        "FS": (0.10, 0.20, -65.0, 2.0),   # Fast spiking
+        "IB": (0.02, 0.20, -55.0, 4.0),   # Intrinsically bursting
+        "CH": (0.02, 0.20, -50.0, 2.0),   # Chattering
+        "LTS": (0.02, 0.25, -65.0, 2.0),  # Low-threshold spiking
+        "I": (0.02, 0.20, -65.0, 8.0),    # Tonic spiking base; uses baseline current
+    }
+
+    def add_neuron_of_type(self, type_name: str, x: float, y: float) -> NeuronModel:
+        a, b, c, d = self.NEURON_PRESETS.get(type_name, (0.02, 0.20, -65.0, 8.0))
+        v0 = c
+        u0 = b * v0
+        i_baseline = 10.0 if type_name == "I" else 0.0
+        neuron = NeuronModel(
+            id=self._next_neuron_id,
+            x=x,
+            y=y,
+            selected=False,
+            a=a,
+            b=b,
+            c=c,
+            d=d,
+            v=v0,
+            u=u0,
+            spiked=False,
+            type_name=type_name,
+            i_baseline=i_baseline,
+        )
         self._next_neuron_id += 1
         self.neurons.append(neuron)
         return neuron
