@@ -8,6 +8,12 @@ import pygame
 
 from graph_model import GraphModel, NeuronModel, ConnectionModel
 from simulator import IzhikevichSimulator, SimulationConfig
+from training import (
+    sample_random_grid,
+    sample_circle_grid,
+    flatten_grid_to_labels,
+    create_input_column_from_labels,
+)
 
 
 SIDEBAR_WIDTH = 200
@@ -48,6 +54,8 @@ class PygameGraphApp:
         self.sidebar_color = (30, 30, 35)
         self.canvas_bg = (245, 245, 248)
         self.grid_color = (230, 230, 235)
+        self.right_panel_color = (36, 36, 42)
+        self.right_panel_width = 220
 
         # UI state
         self.buttons: List[Button] = []
@@ -142,13 +150,38 @@ class PygameGraphApp:
     def _handle_event(self, event: pygame.event.Event) -> None:
         mouse_pos = pygame.mouse.get_pos()
         mouse_pos_v = pygame.Vector2(mouse_pos)
-        canvas_rect = pygame.Rect(SIDEBAR_WIDTH, 0, WINDOW_WIDTH - SIDEBAR_WIDTH, WINDOW_HEIGHT)
+        canvas_rect = pygame.Rect(SIDEBAR_WIDTH, 0, WINDOW_WIDTH - SIDEBAR_WIDTH - self.right_panel_width, WINDOW_HEIGHT)
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # Simulate controls first
             if self.sim_advance_rect.collidepoint(mouse_pos):
                 self.sim.advance_steps(self._steps_per_click)
                 self._add_message(f"advanced {self._steps_per_click} steps")
+                return
+            # Training panel buttons
+            if hasattr(self, "_train_btn_random") and self._train_btn_random.collidepoint(mouse_pos):
+                self._sampled_grid = sample_random_grid(30, 30, p_one=0.5)
+                self._add_message("sampled random grid 30x30")
+                return
+            if hasattr(self, "_train_btn_circle") and self._train_btn_circle.collidepoint(mouse_pos):
+                self._sampled_grid = sample_circle_grid(30, 30, radius=0.6)
+                self._add_message("sampled circle grid 30x30")
+                return
+            # Create input column from current sampled grid
+            if hasattr(self, "_train_btn_create") and self._train_btn_create.collidepoint(mouse_pos):
+                if getattr(self, "_sampled_grid", None) is not None:
+                    labels = flatten_grid_to_labels(self._sampled_grid)
+                    create_input_column_from_labels(
+                        self.model,
+                        labels,
+                        origin=(SIDEBAR_WIDTH + 80, 80),
+                        spacing=6.0,
+                        type_for_label1="I",
+                        type_for_label0="FS",
+                    )
+                    self._add_message(f"created input column ({len(labels)})")
+                else:
+                    self._add_message("no sampled grid")
                 return
             if self.sim_dt_minus_rect.collidepoint(mouse_pos):
                 self.sim.config.dt_ms = max(0.1, self.sim.config.dt_ms - self._dt_step)
@@ -187,6 +220,8 @@ class PygameGraphApp:
                     self.dragging_palette_item = self.buttons[idx].label
                     self.drag_position = mouse_pos_v
                     return
+
+            # No dataset creation on left panel
 
             # Delete button acts on selected items
             del_idx = self._delete_button_index()
@@ -306,10 +341,16 @@ class PygameGraphApp:
     def _draw(self) -> None:
         self.screen.fill(self.canvas_bg)
 
-        # Sidebar
+        # Sidebar (left)
         pygame.draw.rect(self.screen, self.sidebar_color, (0, 0, SIDEBAR_WIDTH, WINDOW_HEIGHT))
         title_surface = self.font.render("Palette", True, (200, 200, 210))
         self.screen.blit(title_surface, (16, 10))
+        # Right training panel
+        right_x = WINDOW_WIDTH - self.right_panel_width
+        pygame.draw.rect(self.screen, self.right_panel_color, (right_x, 0, self.right_panel_width, WINDOW_HEIGHT))
+        tr_title = self.font.render("Training", True, (200, 200, 210))
+        self.screen.blit(tr_title, (right_x + 12, 10))
+        self._draw_training_panel(right_x)
 
         # Buttons
         mouse_pos = pygame.mouse.get_pos()
@@ -348,6 +389,54 @@ class PygameGraphApp:
         self._draw_stats()
         self._draw_messages()
         self._draw_selected_weight_buttons()
+
+    def _draw_training_panel(self, right_x: int) -> None:
+        # Buttons for sampling datasets (visual only)
+        y = 40
+        btn_w = self.right_panel_width - 24
+        buttons = [
+            ("Sample Random Grid", pygame.Rect(right_x + 12, y, btn_w, 28)),
+            ("Sample Circle Grid", pygame.Rect(right_x + 12, y + 36, btn_w, 28)),
+            ("Create Input Column", pygame.Rect(right_x + 12, y + 36 + 36, btn_w, 28)),
+        ]
+        mouse_pos = pygame.mouse.get_pos()
+        for label, rect in buttons:
+            is_hover = rect.collidepoint(mouse_pos)
+            pygame.draw.rect(self.screen, (60, 60, 70) if not is_hover else (85, 85, 100), rect, border_radius=4)
+            t = self.font.render(label, True, (230, 230, 240))
+            tr = t.get_rect(center=rect.center)
+            self.screen.blit(t, tr)
+
+        # Remember rects for click detection
+        self._train_btn_random = buttons[0][1]
+        self._train_btn_circle = buttons[1][1]
+        self._train_btn_create = buttons[2][1]
+
+        # Preview sampled points
+        preview_rect = pygame.Rect(right_x + 12, buttons[-1][1].bottom + 12, btn_w, 160)
+        pygame.draw.rect(self.screen, (32, 32, 38), preview_rect, border_radius=6)
+        pygame.draw.rect(self.screen, (55, 55, 64), preview_rect, width=1, border_radius=6)
+
+        if not hasattr(self, "_sampled_grid"):
+            self._sampled_grid = None
+        # draw grid in preview
+        if self._sampled_grid is not None:
+            grid = self._sampled_grid
+            h = len(grid)
+            w = len(grid[0]) if h > 0 else 0
+            if w > 0 and h > 0:
+                cell_w = preview_rect.width / w
+                cell_h = preview_rect.height / h
+                for r in range(h):
+                    for c in range(w):
+                        v = 1 if grid[r][c] else 0
+                        color = (240, 160, 90) if v == 1 else (90, 160, 240)
+                        rx = int(preview_rect.left + c * cell_w)
+                        ry = int(preview_rect.top + r * cell_h)
+                        rw = int(cell_w + 0.999)
+                        rh = int(cell_h + 0.999)
+                        pygame.draw.rect(self.screen, color, (rx, ry, rw, rh))
+        self._train_preview_rect = preview_rect
 
     def _draw_simulate_panel(self) -> None:
         # Title
@@ -397,6 +486,8 @@ class PygameGraphApp:
             if b.label == "Delete":
                 return i
         return None
+
+    # helper removed
 
     def _draw_neuron_overview(self) -> None:
         neuron = self._get_selected_neuron()
