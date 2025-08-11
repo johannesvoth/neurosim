@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Callable, Optional
 
 from graph_model import GraphModel, NeuronModel, ConnectionModel
 
@@ -21,10 +21,12 @@ class IzhikevichSimulator:
         # One-step per-neuron current injections to be applied on the next step
         self._pending_injection: Dict[int, float] = {}
 
-    def advance_steps(self, steps: int) -> None:
+    def advance_steps(self, steps: int, on_step: Optional[Callable[[GraphModel], None]] = None) -> None:
         for _ in range(max(0, steps)):
             self._step_euler()
             self.step_count += 1
+            if on_step is not None:
+                on_step(self.model)
 
     def inject_current(self, neuron_id: int, amount: float) -> None:
         """Queue a one-step current injection for the given neuron (applied on next step)."""

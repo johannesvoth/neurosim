@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, ClassVar
+from typing import Dict, List, Optional, Tuple, ClassVar, Set
 
 
 @dataclass
@@ -35,6 +35,7 @@ class GraphModel:
     neurons: List[NeuronModel] = field(default_factory=list)
     connections: List[ConnectionModel] = field(default_factory=list)
     _next_neuron_id: int = 1
+    _edge_set: Set[Tuple[int, int]] = field(default_factory=set)
 
     def add_neuron(self, x: float, y: float) -> NeuronModel:
         neuron = NeuronModel(id=self._next_neuron_id, x=x, y=y)
@@ -86,11 +87,23 @@ class GraphModel:
     def add_connection(self, source_id: int, target_id: int) -> Tuple[bool, str]:
         if source_id == target_id:
             return False, "no connection"
-        for c in self.connections:
-            if c.source_id == source_id and c.target_id == target_id:
-                return False, "connection already exists"
+        if (source_id, target_id) in self._edge_set:
+            return False, "connection already exists"
         self.connections.append(ConnectionModel(source_id=source_id, target_id=target_id, weight=0.0))
+        self._edge_set.add((source_id, target_id))
         return True, "connection made"
+
+    def add_connection_fast(self, source_id: int, target_id: int, weight: float = 0.0) -> bool:
+        """Fast path without duplicate scan. Returns True if added, False if skipped.
+        Skips self-loop and duplicates using an internal edge set.
+        """
+        if source_id == target_id:
+            return False
+        if (source_id, target_id) in self._edge_set:
+            return False
+        self.connections.append(ConnectionModel(source_id=source_id, target_id=target_id, weight=weight))
+        self._edge_set.add((source_id, target_id))
+        return True
 
     def delete_selected(self) -> None:
         selected_neuron_ids = {n.id for n in self.neurons if n.selected}
@@ -99,9 +112,14 @@ class GraphModel:
             self.connections = [
                 c for c in self.connections if c.source_id not in selected_neuron_ids and c.target_id not in selected_neuron_ids
             ]
+            # Rebuild edge set after deletions
+            self._edge_set = {(c.source_id, c.target_id) for c in self.connections}
             return
         # delete selected connection if any
+        removed = {(c.source_id, c.target_id) for c in self.connections if c.selected}
         self.connections = [c for c in self.connections if not c.selected]
+        if removed:
+            self._edge_set.difference_update(removed)
 
     def clear_selection(self) -> None:
         for n in self.neurons:

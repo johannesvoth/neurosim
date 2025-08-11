@@ -265,9 +265,3 @@ def build_input_layer_for_image(
         white_type=white_type,
         black_type=black_type,
     )
-
-
-# Removed earlier synthetic XY datasets (blobs/xor/circles/spiral) and XY placement to simplify
-
-
-
